@@ -20,7 +20,7 @@ WORKDIR /app
 COPY requirements-server.txt .
 RUN pip install -r requirements-server.txt
 
-COPY preprocess.py predictor.py detect.py server.py ./
+COPY preprocess.py paper.py predictor.py detect.py server.py ./
 COPY static ./static
 COPY models/mnist_cnn.onnx ./models/mnist_cnn.onnx
 

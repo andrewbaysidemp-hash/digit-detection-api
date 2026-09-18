@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-FILES = ["Dockerfile", ".dockerignore", "requirements-server.txt", "server.py", "preprocess.py", "predictor.py", "detect.py"]
+FILES = ["Dockerfile", ".dockerignore", "requirements-server.txt", "server.py", "preprocess.py", "paper.py", "predictor.py", "detect.py"]
 
 
 def main() -> int:

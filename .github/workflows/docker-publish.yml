@@ -73,3 +73,14 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+
+      # Optional: redeploy the Render service that runs this image.
+      # Render dashboard -> your service -> Settings -> Deploy Hook -> copy the URL,
+      # then GitHub repo -> Settings -> Secrets -> Actions -> RENDER_DEPLOY_HOOK.
+      - name: Trigger Render redeploy
+        if: ${{ success() }}
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then echo "RENDER_DEPLOY_HOOK secret not set - skipping redeploy"; exit 0; fi
+          curl -sf -X POST "$HOOK" && echo "Render redeploy triggered"
