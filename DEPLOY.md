@@ -229,7 +229,9 @@ const { text, lines } = await r.json();
 ```
 
 Query parameters on both detect endpoints: `min_conf` (0-1, default 0.5),
-`annotate` (JSON endpoint only), `max_side` (200-4000), `otsu`, `keep_lines`,
+`annotate` (JSON endpoint only), `paper` (find the sheet of paper first and
+read digits only on it; the response then carries a `paper` object with the
+sheet's corners), `max_side` (200-4000), `otsu`, `keep_lines`,
 `binary_crops`, `target_stroke` (0-0.4). Errors: 400 undecodable/empty image,
 401 missing or wrong API key, 413 upload larger than `MAX_UPLOAD_MB`, 422
 invalid parameter. An image with no digits is a normal 200 with

@@ -11,13 +11,15 @@ Keys in the window:
     r         reset the stabilised reading
     + / -     raise / lower the confidence threshold
     o         toggle global Otsu threshold (thick marker strokes)
-    [ / ]     shrink / grow the detection area (the green guide box)
+    [ / ]     shrink / grow the searched area (the green guide box)
 
 How it works: the capture loop shows frames at camera speed while a worker
-thread segments and classifies the NEWEST frame only (older frames are
-dropped), so the display never stalls. Detection runs on the centre area of
-the frame (the guide box) at a reduced working resolution, and the reading is
-stabilised with a majority vote over the last few results.
+thread processes the NEWEST frame only (older frames are dropped), so the
+display never stalls. By default the sheet of paper is located first (orange
+outline) and digits are searched only on it, never on the desk, hands or
+background; --no-paper detects on the whole guide box instead. Detection runs
+at a reduced working resolution, and the reading is stabilised with a
+majority vote over the last few results.
 """
 from __future__ import annotations
 
@@ -35,8 +37,8 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 import cv2
 import numpy as np
 
-from detect import annotate, recognise
-from preprocess import PreprocessParams, load_image, save_image, segment_image
+from detect import annotate, run_pipeline
+from preprocess import PreprocessParams, load_image, save_image
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 
@@ -56,7 +58,8 @@ def parse_args(argv=None):
     ap.add_argument("--width", type=int, default=1280, help="requested camera width (default 1280)")
     ap.add_argument("--height", type=int, default=720, help="requested camera height (default 720)")
     ap.add_argument("--max-side", type=int, default=640, help="working resolution of the detection area (default 640; lower = faster)")
-    ap.add_argument("--roi", type=float, default=0.7, help="fraction of the frame (centre) used for detection, 0.2-1.0 (default 0.7)")
+    ap.add_argument("--roi", type=float, default=None, help="fraction of the frame (centre) searched, 0.2-1.0 (default: 1.0 with paper detection, 0.7 without)")
+    ap.add_argument("--no-paper", action="store_true", help="do not look for the sheet of paper first (detect on the whole area)")
     ap.add_argument("--min-conf", type=float, default=0.6, help="confidence below which a digit is shown as ? (default 0.6)")
     ap.add_argument("--history", type=int, default=8, help="number of results in the majority vote (default 8)")
     ap.add_argument("--otsu", action="store_true", help="start with the global Otsu threshold")
@@ -102,18 +105,29 @@ def roi_rect(shape: tuple[int, ...], frac: float) -> tuple[int, int, int, int]:
     return x0, y0, x0 + rw, y0 + rh
 
 
-def detect_frame(frame: np.ndarray, predictor, params: PreprocessParams, roi: float, min_conf: float) -> dict:
-    """Run the pipeline on the centre area of one frame. Boxes are returned in
+def detect_frame(frame: np.ndarray, predictor, params: PreprocessParams, roi: float, min_conf: float, use_paper: bool = True) -> dict:
+    """Run the pipeline on the centre area of one frame (finding the sheet of
+    paper first when use_paper). Boxes and the paper outline are returned in
     full-frame coordinates."""
     x0, y0, x1, y1 = roi_rect(frame.shape, roi)
     t0 = time.perf_counter()
-    seg = segment_image(frame[y0:y1, x0:x1], params)
-    lines = recognise(seg, predictor, min_conf) if seg.crops else []
+    result, paper, _seg = run_pipeline(frame[y0:y1, x0:x1], params, predictor, min_conf, use_paper=use_paper)
+    lines = result["lines"]
     for ln in lines:
         for d in ln["digits"]:
             d["x"] += x0
             d["y"] += y0
-    return {"lines": lines, "text": " | ".join(ln["text"] for ln in lines), "digits": len(seg.crops), "roi": (x0, y0, x1, y1), "ms": (time.perf_counter() - t0) * 1000, "ts": time.time()}
+            if d.get("quad"):
+                d["quad"] = [[qx + x0, qy + y0] for qx, qy in d["quad"]]
+    paper_quad = None
+    if paper is not None and not paper.fills_frame:
+        paper_quad = [[int(round(float(qx))) + x0, int(round(float(qy))) + y0] for qx, qy in paper.quad]
+    return {
+        "lines": lines, "text": " | ".join(ln["text"] for ln in lines), "digits": result["digit_count"],
+        "roi": (x0, y0, x1, y1), "paper_quad": paper_quad,
+        "paper_found": bool(paper is not None) if use_paper else None,
+        "ms": (time.perf_counter() - t0) * 1000, "ts": time.time(),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -122,9 +136,9 @@ def detect_frame(frame: np.ndarray, predictor, params: PreprocessParams, roi: fl
 class Detector(threading.Thread):
     """Takes the newest submitted frame, detects, publishes the result."""
 
-    def __init__(self, predictor, params: PreprocessParams, roi: float, min_conf: float):
+    def __init__(self, predictor, params: PreprocessParams, roi: float, min_conf: float, use_paper: bool = True):
         super().__init__(daemon=True)
-        self.predictor, self.params, self.roi, self.min_conf = predictor, params, roi, min_conf
+        self.predictor, self.params, self.roi, self.min_conf, self.use_paper = predictor, params, roi, min_conf, use_paper
         self._frame = None
         self._cond = threading.Condition()
         self.result: dict | None = None
@@ -149,9 +163,9 @@ class Detector(threading.Thread):
             if frame is None:
                 continue
             try:
-                self.result = detect_frame(frame, self.predictor, self.params, self.roi, self.min_conf)
+                self.result = detect_frame(frame, self.predictor, self.params, self.roi, self.min_conf, self.use_paper)
             except Exception as exc:  # keep the window alive on a bad frame
-                self.result = {"lines": [], "text": "", "digits": 0, "roi": roi_rect(frame.shape, self.roi), "ms": 0.0, "ts": time.time(), "error": str(exc)}
+                self.result = {"lines": [], "text": "", "digits": 0, "roi": roi_rect(frame.shape, self.roi), "paper_quad": None, "paper_found": None, "ms": 0.0, "ts": time.time(), "error": str(exc)}
 
 
 # --------------------------------------------------------------------------- #
@@ -160,7 +174,10 @@ class Detector(threading.Thread):
 def draw_overlay(frame: np.ndarray, result: dict | None, roi: float, stable_text: str, agreement: float, fps: float, min_conf: float, paused: bool, otsu: bool) -> np.ndarray:
     vis = annotate(frame, result["lines"]) if result else frame.copy()
     x0, y0, x1, y1 = roi_rect(frame.shape, roi)
-    cv2.rectangle(vis, (x0, y0), (x1, y1), (0, 200, 0), 1)
+    if roi < 1.0:
+        cv2.rectangle(vis, (x0, y0), (x1, y1), (0, 200, 0), 1)
+    if result and result.get("paper_quad"):
+        cv2.polylines(vis, [np.array(result["paper_quad"], dtype=np.int32).reshape(-1, 1, 2)], True, (255, 160, 0), 2, cv2.LINE_AA)
     h, w = vis.shape[:2]
     bar_h = 56
     cv2.rectangle(vis, (0, 0), (w, bar_h), (0, 0, 0), -1)
@@ -168,7 +185,10 @@ def draw_overlay(frame: np.ndarray, result: dict | None, roi: float, stable_text
     color = (0, 255, 0) if agreement >= 0.6 else (0, 200, 255)
     cv2.putText(vis, reading, (12, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 2, cv2.LINE_AA)
     det_ms = result["ms"] if result else 0.0
-    info = f"{fps:4.1f} fps  detect {det_ms:5.1f} ms  agree {agreement * 100:3.0f}%  conf>={min_conf:.2f}  {'OTSU ' if otsu else ''}{'PAUSED' if paused else ''}"
+    paper_state = ""
+    if result and result.get("paper_found") is not None:
+        paper_state = "paper: found  " if result["paper_found"] else "paper: NOT FOUND  "
+    info = f"{paper_state}{fps:4.1f} fps  detect {det_ms:5.1f} ms  agree {agreement * 100:3.0f}%  conf>={min_conf:.2f}  {'OTSU ' if otsu else ''}{'PAUSED' if paused else ''}"
     cv2.putText(vis, info, (w - 8 - int(len(info) * 9.6), 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
     cv2.putText(vis, "q quit  space pause  s snapshot  r reset  +/- conf  o otsu  [ ] area", (w - 8 - 70 * 9, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (150, 150, 150), 1, cv2.LINE_AA)
     return vis
@@ -226,10 +246,12 @@ def main(argv=None) -> int:
         return 1
 
     sync = args.sync or args.no_window
-    roi, min_conf = args.roi, args.min_conf
+    use_paper = not args.no_paper
+    roi = args.roi if args.roi is not None else (1.0 if use_paper else 0.7)
+    min_conf = args.min_conf
     detector = None
     if not sync:
-        detector = Detector(predictor, params, roi, min_conf)
+        detector = Detector(predictor, params, roi, min_conf, use_paper)
         detector.start()
     stab = Stabilizer(args.history)
     last_result_ts = 0.0
@@ -238,7 +260,7 @@ def main(argv=None) -> int:
     frames = 0
     fps, t_prev = 0.0, time.perf_counter()
     last_printed = None
-    print(f"source {args.source} | model {args.model} ({predictor.backend}) | press q to quit", file=sys.stderr)
+    print(f"source {args.source} | model {args.model} ({predictor.backend}) | paper detection {'on' if use_paper else 'off'} | press q to quit", file=sys.stderr)
 
     try:
         while True:
@@ -256,7 +278,7 @@ def main(argv=None) -> int:
 
             if not paused:
                 if sync:
-                    result = detect_frame(frame, predictor, params, roi, min_conf)
+                    result = detect_frame(frame, predictor, params, roi, min_conf, use_paper)
                 else:
                     detector.submit(frame)
                     result = detector.result
@@ -267,7 +289,8 @@ def main(argv=None) -> int:
 
             if args.no_window:
                 if result and (result["text"], stable_text) != last_printed:
-                    print(f"frame {frames}: now={result['text']!r} stable={stable_text!r} agree={agreement:.2f} digits={result['digits']} {result['ms']:.1f} ms")
+                    paper_note = "" if result.get("paper_found") is None else (" paper=found" if result["paper_found"] else " paper=none")
+                    print(f"frame {frames}: now={result['text']!r} stable={stable_text!r} agree={agreement:.2f} digits={result['digits']}{paper_note} {result['ms']:.1f} ms")
                     last_printed = (result["text"], stable_text)
             else:
                 cv2.imshow("Digit detection", draw_overlay(frame, result, roi, stable_text, agreement, fps, min_conf, paused, params.use_otsu))

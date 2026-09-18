@@ -37,9 +37,9 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from detect import annotate as draw_annotations
-from detect import recognise
+from detect import run_pipeline
 from predictor import load_predictor
-from preprocess import PreprocessParams, decode_image, segment_image
+from preprocess import PreprocessParams, decode_image
 
 API_VERSION = "1.0.0"
 ROOT = Path(__file__).resolve().parent
@@ -54,9 +54,23 @@ CONFIG = {
 }
 
 
+class _LockedPredictor:
+    """Serialises model calls (TFLite interpreters are not thread-safe; for
+    ONNX the lock costs ~nothing). Segmentation still runs in parallel."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.lock = threading.Lock()
+        self.backend = inner.backend
+        self.path = inner.path
+
+    def predict(self, batch):
+        with self.lock:
+            return self.inner.predict(batch)
+
+
 class _State:
     predictor = None
-    lock = threading.Lock()   # TFLite interpreters are not thread-safe; ONNX is, but the lock costs ~nothing
     started = time.time()
     requests = 0
     digits = 0
@@ -67,7 +81,7 @@ STATE = _State()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    STATE.predictor = load_predictor(CONFIG["model_path"])  # fails fast if the model is missing
+    STATE.predictor = _LockedPredictor(load_predictor(CONFIG["model_path"]))  # fails fast if the model is missing
     yield
 
 
@@ -113,6 +127,7 @@ class DetectResponse(BaseModel):
     lines: list[Line]
     digit_count: int
     rejected: list[RejectedBlob]
+    paper: Optional[dict] = Field(default=None, description="with paper=true: found, fills_frame, area_fraction, quad (TL,TR,BR,BL), width, height")
     image: dict
     model: dict
     timing_ms: dict
@@ -144,28 +159,15 @@ def build_params(max_side: int, otsu: bool, keep_lines: bool, binary_crops: bool
     return PreprocessParams(max_side=max_side, use_otsu=otsu, remove_lines=not keep_lines, soft_crops=not binary_crops, target_stroke=target_stroke)
 
 
-def run_detection(img: np.ndarray, min_conf: float, params: PreprocessParams) -> dict:
-    t0 = time.perf_counter()
-    seg = segment_image(img, params)
-    t_seg = (time.perf_counter() - t0) * 1000
-    t0 = time.perf_counter()
-    if seg.crops:
-        with STATE.lock:
-            lines = recognise(seg, STATE.predictor, min_conf)
-    else:
-        lines = []
-    t_inf = (time.perf_counter() - t0) * 1000
+def run_detection(img: np.ndarray, min_conf: float, params: PreprocessParams, use_paper: bool = False) -> tuple[dict, object]:
+    result, paper, _seg = run_pipeline(img, params, STATE.predictor, min_conf, use_paper=use_paper)
     STATE.requests += 1
-    STATE.digits += len(seg.crops)
-    return {
-        "text": "\n".join(ln["text"] for ln in lines),
-        "lines": lines,
-        "digit_count": len(seg.crops),
-        "rejected": [r.__dict__ for r in seg.rejected],
-        "image": {"width": int(img.shape[1]), "height": int(img.shape[0])},
-        "model": {"path": Path(CONFIG["model_path"]).name, "backend": STATE.predictor.backend, "api_version": API_VERSION},
-        "timing_ms": {"segmentation": round(t_seg, 1), "inference": round(t_inf, 1)},
-    }
+    STATE.digits += result["digit_count"]
+    t = result.pop("timing_ms")
+    result["image"] = {"width": int(img.shape[1]), "height": int(img.shape[0])}
+    result["model"] = {"path": Path(CONFIG["model_path"]).name, "backend": STATE.predictor.backend, "api_version": API_VERSION}
+    result["timing_ms"] = {"paper": t.get("paper_ms", 0.0), "segmentation": t["segmentation_ms"], "inference": t["inference_ms"]}
+    return result, paper
 
 
 def encode_png(img: np.ndarray) -> bytes:
@@ -212,6 +214,7 @@ def detect(
     image: UploadFile = File(..., description="PNG, JPEG, BMP, WEBP or TIFF image containing digits"),
     min_conf: float = Query(0.5, ge=0.0, le=1.0, description="digits below this confidence are marked ? and accepted=false"),
     annotate: bool = Query(False, description="also return the annotated image as base64 PNG"),
+    paper: bool = Query(False, description="locate the sheet of paper first and detect digits only on it (camera frames)"),
     max_side: int = Query(CONFIG["max_side"], ge=200, le=4000, description="working resolution cap for the longer image side"),
     otsu: bool = Query(False, description="global Otsu threshold instead of adaptive (thick marker strokes)"),
     keep_lines: bool = Query(False, description="do not remove ruled lines / underlines"),
@@ -219,9 +222,9 @@ def detect(
     target_stroke: float = Query(0.12, ge=0.0, le=0.4, description="stroke width target as a fraction of digit size; 0 disables"),
 ) -> dict:
     img = read_upload(image)
-    result = run_detection(img, min_conf, build_params(max_side, otsu, keep_lines, binary_crops, target_stroke))
+    result, sheet = run_detection(img, min_conf, build_params(max_side, otsu, keep_lines, binary_crops, target_stroke), use_paper=paper)
     if annotate:
-        result["annotated_png_base64"] = base64.b64encode(encode_png(draw_annotations(img, result["lines"]))).decode("ascii")
+        result["annotated_png_base64"] = base64.b64encode(encode_png(draw_annotations(img, result["lines"], paper=sheet))).decode("ascii")
     return result
 
 
@@ -230,6 +233,7 @@ def detect(
 def detect_annotated(
     image: UploadFile = File(...),
     min_conf: float = Query(0.5, ge=0.0, le=1.0),
+    paper: bool = Query(False),
     max_side: int = Query(CONFIG["max_side"], ge=200, le=4000),
     otsu: bool = Query(False),
     keep_lines: bool = Query(False),
@@ -237,6 +241,6 @@ def detect_annotated(
     target_stroke: float = Query(0.12, ge=0.0, le=0.4),
 ) -> Response:
     img = read_upload(image)
-    result = run_detection(img, min_conf, build_params(max_side, otsu, keep_lines, binary_crops, target_stroke))
-    png = encode_png(draw_annotations(img, result["lines"]))
+    result, sheet = run_detection(img, min_conf, build_params(max_side, otsu, keep_lines, binary_crops, target_stroke), use_paper=paper)
+    png = encode_png(draw_annotations(img, result["lines"], paper=sheet))
     return Response(content=png, media_type="image/png", headers={"X-Detected-Text": result["text"].replace("\n", "|"), "X-Digit-Count": str(result["digit_count"])})

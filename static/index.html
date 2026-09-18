@@ -58,6 +58,7 @@
       <input type="file" id="file" accept="image/*" hidden>
       <div class="row">
         <label>Min. confidence <span id="confv">0.50</span> <input type="range" id="conf" min="0" max="1" step="0.05" value="0.5"></label>
+        <label><input type="checkbox" id="paper"> find the paper first</label>
         <label><input type="checkbox" id="otsu"> thick marker (Otsu)</label>
         <label><input type="checkbox" id="keeplines"> keep ruled lines</label>
         <button id="go" disabled>Detect</button>
@@ -82,6 +83,7 @@
         <button id="camFlip" disabled title="switch between front and back camera">Flip</button>
         <label>Min. confidence <span id="cconfv">0.60</span> <input type="range" id="cconf" min="0" max="1" step="0.05" value="0.6"></label>
         <label>Area <span id="croiv">70%</span> <input type="range" id="croi" min="30" max="100" step="5" value="70"></label>
+        <label><input type="checkbox" id="cpaper" checked> digits are on a sheet of paper</label>
         <label><input type="checkbox" id="cotsu"> thick marker (Otsu)</label>
       </div>
       <div class="stage" id="stage" hidden>
@@ -89,7 +91,7 @@
         <canvas id="overlay"></canvas>
       </div>
       <div class="live" id="liveText"></div>
-      <div class="meta" id="liveMeta">Hold the digits inside the green box. The reading is a majority vote over the last 8 frames; green means stable.</div>
+      <div class="meta" id="liveMeta">Show the sheet of paper to the camera; it is outlined in orange and only digits on it are read. The reading is a majority vote over the last 8 frames; green means stable.</div>
       <div class="meta err" id="camError" hidden></div>
     </div>
   </section>
@@ -130,7 +132,7 @@
     if (!file) return;
     go.disabled = true; go.textContent = 'Detecting...';
     const fd = new FormData(); fd.append('image', file);
-    const params = new URLSearchParams({ annotate: 'true', min_conf: conf.value, otsu: $('otsu').checked, keep_lines: $('keeplines').checked });
+    const params = new URLSearchParams({ annotate: 'true', min_conf: conf.value, paper: $('paper').checked, otsu: $('otsu').checked, keep_lines: $('keeplines').checked });
     try {
       const t0 = performance.now();
       const r = await fetch('/api/v1/detect?' + params, { method: 'POST', body: fd });
@@ -139,7 +141,8 @@
       $('out').hidden = false;
       if (!r.ok) { $('text').innerHTML = '<span class="err">Error ' + r.status + '</span>'; $('meta').textContent = j.detail || ''; $('img').removeAttribute('src'); $('json').textContent = JSON.stringify(j, null, 2); return; }
       $('text').textContent = j.digit_count ? j.text.replace(/\n/g, '  |  ') : 'no digits found';
-      $('meta').innerHTML = '<span class="ok">' + j.digit_count + ' digit(s), ' + j.lines.length + ' line(s)</span> - segmentation ' + j.timing_ms.segmentation + ' ms, inference ' + j.timing_ms.inference + ' ms, round trip ' + ms + ' ms, backend ' + j.model.backend;
+      const paperNote = j.paper ? (j.paper.found ? (j.paper.fills_frame ? ' | paper: whole image' : ' | paper: found (' + Math.round(j.paper.area_fraction * 100) + '% of image)') : ' | paper: not found') : '';
+      $('meta').innerHTML = '<span class="ok">' + j.digit_count + ' digit(s), ' + j.lines.length + ' line(s)</span> - segmentation ' + j.timing_ms.segmentation + ' ms, inference ' + j.timing_ms.inference + ' ms, round trip ' + ms + ' ms, backend ' + j.model.backend + paperNote;
       if (j.annotated_png_base64) $('img').src = 'data:image/png;base64,' + j.annotated_png_base64;
       const copy = Object.assign({}, j); delete copy.annotated_png_base64;
       $('json').textContent = JSON.stringify(copy, null, 2);
@@ -211,7 +214,7 @@
     wctx.drawImage(video, roi.x, roi.y, roi.w, roi.h, 0, 0, work.width, work.height);
     const blob = await new Promise(r => work.toBlob(r, 'image/jpeg', 0.8));
     const fd = new FormData(); fd.append('image', blob, 'frame.jpg');
-    const params = new URLSearchParams({ min_conf: cconf.value, otsu: $('cotsu').checked, max_side: '640' });
+    const params = new URLSearchParams({ min_conf: cconf.value, paper: $('cpaper').checked, otsu: $('cotsu').checked, max_side: '640' });
     const t0 = performance.now();
     try {
       const r = await fetch('/api/v1/detect?' + params, { method: 'POST', body: fd });
@@ -229,7 +232,8 @@
       drawResult(j, roi, scale);
       $('liveText').textContent = best || '-';
       $('liveText').className = 'live ' + (agree >= 0.6 && best ? 'ok' : 'warn');
-      $('liveMeta').textContent = `${j.digit_count} digit(s) now | agreement ${Math.round(agree * 100)}% | ${fpsAvg.toFixed(1)} fps | server ${j.timing_ms.segmentation + j.timing_ms.inference} ms, round trip ${Math.round(rt)} ms | ${j.model.backend}`;
+      const paperNote = j.paper ? (j.paper.found ? (j.paper.fills_frame ? 'paper: fills view' : 'paper: found') : 'paper: NOT FOUND') + ' | ' : '';
+      $('liveMeta').textContent = `${paperNote}${j.digit_count} digit(s) now | agreement ${Math.round(agree * 100)}% | ${fpsAvg.toFixed(1)} fps | server ${(j.timing_ms.paper || 0) + j.timing_ms.segmentation + j.timing_ms.inference} ms, round trip ${Math.round(rt)} ms | ${j.model.backend}`;
     } catch (e) {
       $('liveMeta').textContent = 'request failed: ' + e.message;
     } finally { inFlight = false; }
@@ -239,15 +243,17 @@
     const vw = video.videoWidth, vh = video.videoHeight;
     if (overlay.width !== vw || overlay.height !== vh) { overlay.width = vw; overlay.height = vh; }
     octx.clearRect(0, 0, vw, vh);
-    octx.lineWidth = 2; octx.strokeStyle = 'rgba(0,200,0,0.7)';
-    octx.strokeRect(roi.x, roi.y, roi.w, roi.h);
+    if (roi.w < vw) { octx.lineWidth = 2; octx.strokeStyle = 'rgba(0,200,0,0.7)'; octx.strokeRect(roi.x, roi.y, roi.w, roi.h); }
+    const toFrame = p => [roi.x + p[0] / scale, roi.y + p[1] / scale];
+    const poly = (pts, color, width) => { octx.beginPath(); pts.forEach((p, i) => { const q = toFrame(p); if (i) octx.lineTo(q[0], q[1]); else octx.moveTo(q[0], q[1]); }); octx.closePath(); octx.strokeStyle = color; octx.lineWidth = width; octx.stroke(); };
+    if (j.paper && j.paper.found && !j.paper.fills_frame) poly(j.paper.quad, '#ff9f1c', 3);
     octx.font = `${Math.max(16, Math.round(vh / 28))}px system-ui, sans-serif`;
     octx.textBaseline = 'bottom';
     j.lines.forEach(l => l.digits.forEach(d => {
       const x = roi.x + d.x / scale, y = roi.y + d.y / scale, w = d.w / scale, h = d.h / scale;
       octx.strokeStyle = d.accepted ? '#22c55e' : '#f59e0b';
       octx.lineWidth = 3;
-      octx.strokeRect(x, y, w, h);
+      if (d.quad) poly(d.quad, octx.strokeStyle, 3); else octx.strokeRect(x, y, w, h);
       const label = (d.accepted ? d.label : '?') + ' ' + d.confidence.toFixed(2);
       octx.fillStyle = 'rgba(0,0,0,0.6)';
       const tw = octx.measureText(label).width;

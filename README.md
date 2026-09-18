@@ -20,6 +20,7 @@ Num-Mnist/
   train.py                  train the CNN on MNIST, save models/mnist_cnn.keras + training_report.json
   detect.py                 CLI: image in -> number(s) out, annotated image, optional JSON and debug dump
   camera.py                 real-time detection from a webcam / video file, with a stabilised live reading
+  paper.py                  finds the sheet of paper in a frame (perspective-corrected) so digits are read only on it
   preprocess.py             OpenCV pipeline: load, threshold, clean, find/merge/split/order digits, 28x28 crops
   predictor.py              loads .keras / .tflite / .onnx models behind one predict() interface
   make_samples.py           builds test images with exact ground truth from real MNIST test digits
@@ -28,6 +29,7 @@ Num-Mnist/
   tests/test_pipeline.py    pytest: preprocessing unit tests + end-to-end accuracy per image category
   tests/test_api.py         pytest: HTTP API tests (FastAPI TestClient)
   tests/test_camera.py      pytest: camera helpers + headless run on a still image
+  tests/test_paper.py       pytest: paper detection on a synthetic tilted sheet with clutter around it
   requirements.txt          pinned core dependencies (CPU only)
   requirements-optional.txt onnxruntime, tf2onnx, onnx, ai-edge-litert
   server.py                 HTTP API (FastAPI): web page, JSON endpoint, annotated PNG, docs, health
@@ -231,29 +233,43 @@ python camera.py --source clip.mp4     # a video file
 python camera.py --source samples\clean_00.png --no-window --frames 3   # headless self-test, prints the reading
 ```
 
-A window shows the camera with a green guide box (the detection area, 70 % of
-the frame by default), boxes and labels on every digit, and a large stabilised
-reading in the top bar: a majority vote over the last 8 detections, green when
-at least 60 % agree, amber while it is still settling. Keys: `q` quit, space
-pause, `s` snapshot to `captures/` (frame, annotated frame, JSON), `r` reset
-the reading, `+`/`-` confidence threshold, `o` toggle Otsu for thick markers,
-`[`/`]` shrink or grow the detection area.
+A window shows the camera, the detected sheet of paper outlined in orange,
+boxes and labels on every digit on it, and a large stabilised reading in the
+top bar: a majority vote over the last 8 detections, green when at least 60 %
+agree, amber while it is still settling. Keys: `q` quit, space pause, `s`
+snapshot to `captures/` (frame, annotated frame, JSON), `r` reset the
+reading, `+`/`-` confidence threshold, `o` toggle Otsu for thick markers,
+`[`/`]` shrink or grow the searched area.
+
+**Paper first.** Digits are only ever on the sheet, so by default the frame is
+not searched as a whole: `paper.py` finds the sheet (the largest bright,
+unsaturated region: white or grey paper qualifies, wood, skin and coloured
+objects do not), fits a quadrilateral to it, warps it to an upright top-down
+view, blanks everything outside the sheet's outline (hands holding it, the
+desk) to paper colour, and only then runs the digit pipeline. Boxes are mapped
+back onto the original frame. Text, edges or logos on the desk are therefore
+ignored, and a sheet held at an angle is read as if it were flat. When the
+bright region covers the whole frame (a scan, a close-up, a white desk) the
+image is used as is. `--no-paper` switches back to searching the guide box.
+The same option exists everywhere: `detect.py --paper` and the API query
+parameter `paper=true` (the web camera tab sends it by default).
 
 Design: the display loop runs at camera speed while a worker thread detects on
 the newest frame only, so the video never stalls even when a frame takes
-longer. Detection works on the guide box at `--max-side 640` (10-40 ms on a
-laptop CPU) plus about 1 ms of ONNX inference, so the reading updates 15-30
-times per second. Tips: fill the box with the paper, avoid backlight, and use
-`--roi 0.5` when the background is busy.
+longer. Paper detection costs 10-30 ms (27 ms measured on a 1280x720 frame),
+segmentation of the sheet at `--max-side 640` 10-40 ms, ONNX inference about
+1 ms, so the reading updates 10-25 times per second on a laptop CPU. Tips: use a background darker or more
+colourful than the paper (a white desk merges with the sheet), avoid
+backlight, and keep the whole sheet in view.
 
 Web page: the "Live camera" tab on the served page (`/`) does the same in
 the browser, including on phones: it grabs frames from `getUserMedia`, sends
-the guide-box area (JPEG, 640 px wide) to `POST /api/v1/detect` as soon as
-the previous answer arrives, draws the boxes on a canvas over the video, and
-shows the same majority-vote reading. Browsers allow camera access only on
-`https://` pages or on `localhost`, which the hosting options in
-[DEPLOY.md](DEPLOY.md) all provide. Expect 3-10 frames per second depending
-on the network round trip; the server work per frame is 10-40 ms.
+them (JPEG, 640 px wide) to `POST /api/v1/detect?paper=true` as soon as the
+previous answer arrives, draws the paper outline and the boxes on a canvas
+over the video, and shows the same majority-vote reading. Browsers allow
+camera access only on `https://` pages or on `localhost`, which the hosting
+options in [DEPLOY.md](DEPLOY.md) all provide. Expect 3-10 frames per second
+depending on the network round trip; the server work per frame is 15-50 ms.
 
 ## 5. The preprocessing pipeline, step by step
 
