@@ -59,7 +59,8 @@ Repository: https://github.com/andrewbaysidemp-hash/digit-detection-api
   ```
 
 - **One-click Render deploy**: the "Deploy to Render" button in the README
-  (Render account required, free plan, sign in with GitHub).
+  (Render account required, free plan, no card, sign in with GitHub). This is
+  the recommended free path; see section 3.
 - **Automatic Hugging Face deploy** (`.github/workflows/deploy-hf-space.yml`):
   add the secret `HF_TOKEN` (a Hugging Face write token) and the variable
   `HF_SPACE` (for example `your-hf-user/digit-api`) in the repo settings, and
@@ -72,14 +73,23 @@ Repository: https://github.com/andrewbaysidemp-hash/digit-detection-api
   python deploy\huggingface\deploy.py
   ```
 
+  Note (checked 2026-09-17): creating a Docker Space on a free Hugging Face
+  account now fails with `402 Payment Required: hosting Gradio and Docker
+  Spaces on free cpu-basic requires a PRO subscription`. Only static Spaces
+  are free. Use this path only with a PRO account.
+
 GitHub itself cannot run the container (GitHub Pages serves static files only),
-which is why one of the hosts below is needed for a live URL.
+which is why one of the hosts below is needed for a live URL. Free hosts that
+still work without a card, in order of preference: Render (section 3), Koyeb
+(section 3b). Google Cloud Run (section 2) is free within quota but needs a
+billing account. Hugging Face Spaces (section 1) needs a PRO subscription.
 
-## 1. Hugging Face Spaces (recommended: free, no credit card, builds the Dockerfile for you)
+## 1. Hugging Face Spaces (PRO subscription required for Docker Spaces)
 
-Free hardware: 2 vCPU, 16 GB RAM, public HTTPS URL
+Hardware on the basic tier: 2 vCPU, 16 GB RAM, public HTTPS URL
 `https://<user>-<space>.hf.space`. A Space goes to sleep after 48 h without
 traffic and wakes on the next request (about 30 s). Only `git` is needed.
+Free accounts can no longer create Docker Spaces (see the note above).
 
 1. Create an account at https://huggingface.co and a token with **write**
    access (Settings -> Access Tokens).
@@ -109,8 +119,8 @@ traffic and wakes on the next request (about 30 s). Only `git` is needed.
    vCPUs, `API_KEY=<secret>` to require the `X-API-Key` header,
    `MAX_UPLOAD_MB=4` to tighten uploads. Changing a variable restarts the Space.
 
-Custom domains are not available for free Spaces. If you need your own domain,
-use Cloud Run or Render below, or put a free Cloudflare Worker in front that
+Custom domains are not available on Spaces. If you need your own domain, use
+Cloud Run or Render below, or put a free Cloudflare Worker in front that
 proxies `api.yourdomain.com` to the Space URL.
 
 ## 2. Google Cloud Run (autoscaling; free tier, but a billing account must exist)
@@ -141,12 +151,14 @@ Dockerfile with Cloud Build and deploys. The command prints the service URL
 - To require a key: `--set-env-vars API_KEY=<secret>`; or remove
   `--allow-unauthenticated` and use Google IAM instead.
 
-## 3. Render (free web service from a GitHub repo, custom domain included)
+## 3. Render (recommended free option: no card, custom domain included)
 
 Free instances have 512 MB RAM and 0.1 vCPU, sleep after 15 minutes of
-inactivity and take 30-60 s to wake. Fine for demos.
+inactivity and take 30-60 s to wake. Fine for demos and light use.
 
-1. Sign in at https://dashboard.render.com with GitHub and click the
+Option A, from the repository (builds the Dockerfile on Render):
+
+1. Sign in at https://dashboard.render.com with GitHub (no card) and click the
    "Deploy to Render" button in the README, or New -> **Blueprint** -> select
    the repository. `render.yaml` defines the service (Docker runtime, free
    plan, health check `/healthz`).
@@ -154,6 +166,31 @@ inactivity and take 30-60 s to wake. Fine for demos.
    `https://digit-detection-api.onrender.com` (Render adds a suffix if the
    name is taken). Settings -> Custom Domains lets you attach your own domain
    for free.
+
+Option B, from the prebuilt image (no build at all): New -> **Web Service**
+-> "Existing image" -> `ghcr.io/andrewbaysidemp-hash/digit-detection-api:latest`,
+instance type Free, health check path `/healthz`. Render pulls the public
+image and starts it in about a minute.
+
+Option C, fully scripted with a Render API key (Account Settings -> API Keys):
+
+```powershell
+$env:RENDER_API_KEY = "rnd_..."
+$owner = (Invoke-RestMethod -Headers @{Authorization="Bearer $env:RENDER_API_KEY"} https://api.render.com/v1/owners)[0].owner.id
+$body = @{ type="web_service"; name="digit-detection-api"; ownerId=$owner;
+           image=@{ imagePath="ghcr.io/andrewbaysidemp-hash/digit-detection-api:latest" };
+           serviceDetails=@{ plan="free"; region="oregon"; healthCheckPath="/healthz"; runtime="image";
+                             envSpecificDetails=@{}; envVars=@(@{key="WORKERS"; value="1"}) } } | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Method Post -Headers @{Authorization="Bearer $env:RENDER_API_KEY"} -ContentType application/json -Body $body https://api.render.com/v1/services
+```
+
+## 3b. Koyeb (free "Hobby" web service, no card)
+
+https://app.koyeb.com -> Create Web Service -> Docker -> image
+`ghcr.io/andrewbaysidemp-hash/digit-detection-api:latest`, instance **Free**,
+port 7860, health check `/healthz`. The URL is
+`https://<app>-<org>.koyeb.app`. The free instance is small (0.1 vCPU,
+512 MB) and may be paused when idle.
 
 The repository's `.gitignore` keeps `venv/` and `samples/` out and commits the
 trained models (3.7 MB), so Render, Cloud Run and Spaces all build from the

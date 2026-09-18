@@ -467,11 +467,12 @@ curl.exe -X POST "http://localhost:7860/api/v1/detect" -F "image=@samples\clean_
 python -m pytest tests\test_api.py -q
 ```
 
-[DEPLOY.md](DEPLOY.md) walks through hosting it for free: Hugging Face Spaces
-(no card, builds the Dockerfile for you), Google Cloud Run (autoscaling within
-the free tier, needs a billing account) and Render (free web service with a
-custom domain), plus API usage examples, the `API_KEY` option and capacity
-notes.
+[DEPLOY.md](DEPLOY.md) walks through hosting it for free: Render (no card,
+custom domain, one-click button above), Koyeb (no card), Google Cloud Run
+(autoscaling within the free tier, needs a billing account) and Hugging Face
+Spaces (Docker Spaces now need a PRO subscription), plus API usage examples,
+the `API_KEY` option and capacity notes. CI publishes a ready-to-run image to
+`ghcr.io/andrewbaysidemp-hash/digit-detection-api:latest`.
 
 ## 9. Known limitations
 
