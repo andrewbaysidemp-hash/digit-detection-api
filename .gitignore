@@ -1,0 +1,14 @@
+# virtual environments and caches
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# generated data (recreate with: python make_samples.py / python detect.py --debug)
+samples/
+debug*/
+*_detected.png
+hf-space/
+
+# the trained models in models/ ARE committed (3.7 MB) so clones and the container work without training

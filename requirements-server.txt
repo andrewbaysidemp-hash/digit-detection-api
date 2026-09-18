@@ -1,0 +1,9 @@
+# Runtime dependencies of the HTTP API container (server.py).
+# No TensorFlow: inference uses the exported ONNX model, which keeps the image
+# small (~400 MB), the cold start under a second and the memory under 300 MB.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+onnxruntime>=1.20
+opencv-python-headless>=4.8,<5   # headless: no GUI libraries needed in the container
+numpy>=1.26

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digit Detection</title>
+<style>
+  :root { --bg: #f6f7f9; --card: #ffffff; --text: #1c1e21; --muted: #5f6672; --accent: #1f6feb; --border: #d9dde3; --ok: #1a7f37; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1216; --card: #171b21; --text: #e6e8eb; --muted: #9aa3ad; --accent: #4c8dff; --border: #2b323b; --ok: #3fb950; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .drop { border: 2px dashed var(--border); border-radius: 10px; padding: 28px; text-align: center; color: var(--muted); cursor: pointer; }
+  .drop.over { border-color: var(--accent); color: var(--accent); }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  label { color: var(--muted); font-size: 0.9rem; }
+  input[type=range] { width: 160px; vertical-align: middle; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 10px 18px; font-size: 1rem; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .result { font-size: 2.4rem; font-weight: 600; letter-spacing: 0.08em; word-break: break-all; margin: 4px 0 8px; }
+  .meta { color: var(--muted); font-size: 0.9rem; }
+  img.out { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); margin-top: 12px; }
+  pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow: auto; font-size: 0.8rem; max-height: 320px; }
+  a { color: var(--accent); }
+  .err { color: #c93c37; }
+  .ok { color: var(--ok); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Digit Detection</h1>
+  <p class="sub">Upload a photo or scan of handwritten or printed digits. The service segments the digits with OpenCV and classifies them with a CNN trained on MNIST. API docs: <a href="/docs">/docs</a></p>
+
+  <div class="card">
+    <div class="drop" id="drop">Drop an image here or click to choose (PNG, JPEG, BMP, WEBP)</div>
+    <input type="file" id="file" accept="image/*" hidden>
+    <div class="row">
+      <label>Min. confidence <span id="confv">0.50</span> <input type="range" id="conf" min="0" max="1" step="0.05" value="0.5"></label>
+      <label><input type="checkbox" id="otsu"> thick marker (Otsu)</label>
+      <label><input type="checkbox" id="keeplines"> keep ruled lines</label>
+      <button id="go" disabled>Detect</button>
+      <span class="meta" id="fname"></span>
+    </div>
+  </div>
+
+  <div class="card" id="out" hidden>
+    <div class="result" id="text"></div>
+    <div class="meta" id="meta"></div>
+    <img class="out" id="img" alt="annotated result">
+    <details style="margin-top:12px"><summary class="meta">JSON response</summary><pre id="json"></pre></details>
+  </div>
+
+  <div class="card">
+    <div class="meta">Call it from anywhere:</div>
+    <pre id="curl">curl -X POST "ORIGIN/api/v1/detect?annotate=false" -F "image=@digits.jpg"</pre>
+  </div>
+</main>
+<script>
+  const drop = document.getElementById('drop'), fileIn = document.getElementById('file'), go = document.getElementById('go');
+  const conf = document.getElementById('conf'), confv = document.getElementById('confv');
+  let file = null;
+  document.getElementById('curl').textContent = document.getElementById('curl').textContent.replace('ORIGIN', location.origin);
+  conf.addEventListener('input', () => confv.textContent = Number(conf.value).toFixed(2));
+  drop.addEventListener('click', () => fileIn.click());
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]); });
+  fileIn.addEventListener('change', () => { if (fileIn.files[0]) pick(fileIn.files[0]); });
+  function pick(f) { file = f; go.disabled = false; document.getElementById('fname').textContent = f.name + ' (' + Math.round(f.size / 1024) + ' KB)'; }
+  go.addEventListener('click', async () => {
+    if (!file) return;
+    go.disabled = true; go.textContent = 'Detecting...';
+    const out = document.getElementById('out'), text = document.getElementById('text'), meta = document.getElementById('meta');
+    const fd = new FormData(); fd.append('image', file);
+    const params = new URLSearchParams({ annotate: 'true', min_conf: conf.value, otsu: document.getElementById('otsu').checked, keep_lines: document.getElementById('keeplines').checked });
+    try {
+      const t0 = performance.now();
+      const r = await fetch('/api/v1/detect?' + params.toString(), { method: 'POST', body: fd });
+      const ms = Math.round(performance.now() - t0);
+      const j = await r.json();
+      out.hidden = false;
+      if (!r.ok) { text.innerHTML = '<span class="err">Error ' + r.status + '</span>'; meta.textContent = j.detail || ''; document.getElementById('img').removeAttribute('src'); document.getElementById('json').textContent = JSON.stringify(j, null, 2); return; }
+      text.textContent = j.digit_count ? j.text.replace(/\n/g, '  |  ') : 'no digits found';
+      meta.innerHTML = '<span class="ok">' + j.digit_count + ' digit(s), ' + j.lines.length + ' line(s)</span> - segmentation ' + j.timing_ms.segmentation + ' ms, inference ' + j.timing_ms.inference + ' ms, round trip ' + ms + ' ms, backend ' + j.model.backend;
+      if (j.annotated_png_base64) document.getElementById('img').src = 'data:image/png;base64,' + j.annotated_png_base64;
+      const copy = Object.assign({}, j); delete copy.annotated_png_base64;
+      document.getElementById('json').textContent = JSON.stringify(copy, null, 2);
+    } catch (e) {
+      out.hidden = false; text.innerHTML = '<span class="err">Request failed</span>'; meta.textContent = String(e);
+    } finally { go.disabled = false; go.textContent = 'Detect'; }
+  });
+</script>
+</body>
+</html>

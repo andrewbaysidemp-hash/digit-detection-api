@@ -1,0 +1,70 @@
+name: Build and publish container
+
+# Builds the API container, smoke-tests it, and publishes it to GitHub Container Registry:
+#   docker run --rm -p 7860:7860 ghcr.io/<owner>/<repo>:latest
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: digit-api:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the container (health + a real detection)
+        run: |
+          docker run -d --rm -p 7860:7860 --name api digit-api:test
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:7860/healthz && break; sleep 1; done
+          curl -sf http://127.0.0.1:7860/healthz
+          convert -size 520x180 xc:white -fill black -pointsize 120 -draw "text 30,140 '4271'" digits.png
+          RESULT=$(curl -sf -X POST "http://127.0.0.1:7860/api/v1/detect" -F "image=@digits.png")
+          echo "$RESULT"
+          echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['text']=='4271', d['text']; print('container OK:', d['text'])"
+          docker logs api
+          docker stop api
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha

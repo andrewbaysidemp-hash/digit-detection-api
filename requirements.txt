@@ -1,0 +1,8 @@
+# Core dependencies - CPU only.
+# Verified on Windows 11 with Python 3.13. TensorFlow 2.21.0 also publishes
+# Windows wheels for Python 3.10, 3.11 and 3.12 (there is no wheel for 3.14).
+tensorflow==2.21.0      # CPU-only on Windows (no native GPU build since 2.10); bundles Keras 3
+opencv-python>=4.8,<5   # OpenCV 4.x API (5.x deliberately excluded)
+numpy>=1.26             # let TensorFlow pick the exact version (2.2.x on Py3.10, 2.5.x on Py3.13)
+pillow>=10              # TrueType font rendering for synthetic test images
+pytest>=8               # test suite

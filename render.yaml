@@ -1,0 +1,14 @@
+# Render Blueprint: deploy the API from a GitHub repository on the free plan.
+# Render -> New -> Blueprint -> pick the repo. Free instances sleep after 15 min
+# of inactivity and wake on the next request (30-60 s cold start).
+services:
+  - type: web
+    name: digit-detection-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: WORKERS
+        value: "1"
+      - key: MAX_UPLOAD_MB
+        value: "8"

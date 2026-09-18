@@ -1,0 +1,22 @@
+{
+  "model_path": "models\\mnist_cnn.keras",
+  "test_accuracy": 0.9947,
+  "test_loss": 0.0161,
+  "val_accuracy": 0.99233,
+  "history": {
+    "accuracy": [0.8665, 0.9585, 0.9697, 0.977, 0.9803, 0.9823],
+    "loss": [0.4135, 0.1365, 0.1003, 0.0761, 0.0659, 0.0588],
+    "val_accuracy": [0.9817, 0.989, 0.991, 0.993, 0.992, 0.9923],
+    "val_loss": [0.058, 0.0393, 0.0333, 0.0266, 0.0277, 0.0237]
+  },
+  "epochs": 6,
+  "batch_size": 128,
+  "augmentation": true,
+  "train_images": 57000,
+  "train_seconds": 356.5,
+  "seconds_per_epoch": 59.4,
+  "params": 188234,
+  "tf_version": "2.21.0",
+  "keras_version": "3.15.1",
+  "seed": 42
+}

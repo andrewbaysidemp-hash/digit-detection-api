@@ -1,0 +1,7 @@
+# Optional faster CPU inference back-ends. Install with:
+#   python -m pip install -r requirements-optional.txt
+# Verified to co-exist with tensorflow==2.21.0 (no dependency downgrades).
+onnxruntime>=1.20       # run models/mnist_cnn.onnx
+tf2onnx>=1.17           # convert the Keras SavedModel export to ONNX
+onnx>=1.16              # required by tf2onnx
+ai-edge-litert>=2.1     # LiteRT (TensorFlow Lite) interpreter, replaces deprecated tf.lite.Interpreter

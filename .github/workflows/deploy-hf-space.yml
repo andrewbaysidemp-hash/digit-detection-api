@@ -1,0 +1,35 @@
+name: Deploy to Hugging Face Space
+
+# Deploys the API to a free Hugging Face Docker Space on every push to main.
+# Set up once in the GitHub repo settings:
+#   Secrets  -> HF_TOKEN : a Hugging Face token with write access
+#   Variables -> HF_SPACE : the Space id, e.g. your-hf-username/digit-api
+# The Space is created on the first run; the live URL is https://<user>-<space>.hf.space
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Deploy
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$HF_TOKEN" ] || [ -z "$HF_SPACE" ]; then
+            echo "HF_TOKEN secret or HF_SPACE variable not set - skipping Hugging Face deployment."
+            exit 0
+          fi
+          python -m pip install --quiet huggingface_hub
+          python deploy/huggingface/deploy.py
