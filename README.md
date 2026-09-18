@@ -19,6 +19,7 @@ docker run --rm -p 7860:7860 ghcr.io/andrewbaysidemp-hash/digit-detection-api:la
 Num-Mnist/
   train.py                  train the CNN on MNIST, save models/mnist_cnn.keras + training_report.json
   detect.py                 CLI: image in -> number(s) out, annotated image, optional JSON and debug dump
+  camera.py                 real-time detection from a webcam / video file, with a stabilised live reading
   preprocess.py             OpenCV pipeline: load, threshold, clean, find/merge/split/order digits, 28x28 crops
   predictor.py              loads .keras / .tflite / .onnx models behind one predict() interface
   make_samples.py           builds test images with exact ground truth from real MNIST test digits
@@ -26,6 +27,7 @@ Num-Mnist/
   export_onnx.py            optional: convert to ONNX and check parity + speed with ONNX Runtime
   tests/test_pipeline.py    pytest: preprocessing unit tests + end-to-end accuracy per image category
   tests/test_api.py         pytest: HTTP API tests (FastAPI TestClient)
+  tests/test_camera.py      pytest: camera helpers + headless run on a still image
   requirements.txt          pinned core dependencies (CPU only)
   requirements-optional.txt onnxruntime, tf2onnx, onnx, ai-edge-litert
   server.py                 HTTP API (FastAPI): web page, JSON endpoint, annotated PNG, docs, health
@@ -217,6 +219,41 @@ python detect.py IMAGE [--model models\mnist_cnn.keras] [--min-conf 0.5]
 - Exit codes: 0 digits found, 2 no digits found, 1 error (missing/undecodable
   image, missing model).
 - `--model models\mnist_cnn.tflite` or `.onnx` switches back-end (section 8).
+
+## 4b. Real-time camera detection (`camera.py` and the web page)
+
+Local webcam:
+
+```powershell
+python camera.py                       # webcam 0, uses models\mnist_cnn.onnx when it exists (lowest latency)
+python camera.py --source 1            # another camera
+python camera.py --source clip.mp4     # a video file
+python camera.py --source samples\clean_00.png --no-window --frames 3   # headless self-test, prints the reading
+```
+
+A window shows the camera with a green guide box (the detection area, 70 % of
+the frame by default), boxes and labels on every digit, and a large stabilised
+reading in the top bar: a majority vote over the last 8 detections, green when
+at least 60 % agree, amber while it is still settling. Keys: `q` quit, space
+pause, `s` snapshot to `captures/` (frame, annotated frame, JSON), `r` reset
+the reading, `+`/`-` confidence threshold, `o` toggle Otsu for thick markers,
+`[`/`]` shrink or grow the detection area.
+
+Design: the display loop runs at camera speed while a worker thread detects on
+the newest frame only, so the video never stalls even when a frame takes
+longer. Detection works on the guide box at `--max-side 640` (10-40 ms on a
+laptop CPU) plus about 1 ms of ONNX inference, so the reading updates 15-30
+times per second. Tips: fill the box with the paper, avoid backlight, and use
+`--roi 0.5` when the background is busy.
+
+Web page: the "Live camera" tab on the served page (`/`) does the same in
+the browser, including on phones: it grabs frames from `getUserMedia`, sends
+the guide-box area (JPEG, 640 px wide) to `POST /api/v1/detect` as soon as
+the previous answer arrives, draws the boxes on a canvas over the video, and
+shows the same majority-vote reading. Browsers allow camera access only on
+`https://` pages or on `localhost`, which the hosting options in
+[DEPLOY.md](DEPLOY.md) all provide. Expect 3-10 frames per second depending
+on the network round trip; the server work per frame is 10-40 ms.
 
 ## 5. The preprocessing pipeline, step by step
 

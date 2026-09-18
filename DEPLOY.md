@@ -7,7 +7,7 @@ all you need:
 
 | path | what |
 | --- | --- |
-| `/` | upload page (calls the API from the same origin, no CORS needed) |
+| `/` | upload page and live-camera page (calls the API from the same origin, no CORS needed; the camera tab needs HTTPS, which every host below provides) |
 | `/docs`, `/openapi.json` | interactive API documentation |
 | `POST /api/v1/detect` | JSON result; multipart field `image` |
 | `POST /api/v1/detect/annotated` | annotated PNG; text in header `X-Detected-Text` |

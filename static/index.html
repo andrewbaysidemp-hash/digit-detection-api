@@ -5,21 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Digit Detection</title>
 <style>
-  :root { --bg: #f6f7f9; --card: #ffffff; --text: #1c1e21; --muted: #5f6672; --accent: #1f6feb; --border: #d9dde3; --ok: #1a7f37; }
+  :root { --bg: #f6f7f9; --card: #ffffff; --text: #1c1e21; --muted: #5f6672; --accent: #1f6feb; --border: #d9dde3; --ok: #1a7f37; --warn: #b7791f; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #0f1216; --card: #171b21; --text: #e6e8eb; --muted: #9aa3ad; --accent: #4c8dff; --border: #2b323b; --ok: #3fb950; }
+    :root { --bg: #0f1216; --card: #171b21; --text: #e6e8eb; --muted: #9aa3ad; --accent: #4c8dff; --border: #2b323b; --ok: #3fb950; --warn: #d9a441; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
   h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.1rem; margin: 0 0 10px; }
   p.sub { color: var(--muted); margin: 0 0 20px; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tabs button { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+  .tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
   .drop { border: 2px dashed var(--border); border-radius: 10px; padding: 28px; text-align: center; color: var(--muted); cursor: pointer; }
   .drop.over { border-color: var(--accent); color: var(--accent); }
   .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
   label { color: var(--muted); font-size: 0.9rem; }
-  input[type=range] { width: 160px; vertical-align: middle; }
+  input[type=range] { width: 140px; vertical-align: middle; }
   button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 10px 18px; font-size: 1rem; cursor: pointer; }
   button:disabled { opacity: 0.5; cursor: default; }
   .result { font-size: 2.4rem; font-weight: 600; letter-spacing: 0.08em; word-break: break-all; margin: 4px 0 8px; }
@@ -29,31 +33,66 @@
   a { color: var(--accent); }
   .err { color: #c93c37; }
   .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  .stage { position: relative; width: 100%; max-width: 900px; margin-top: 12px; background: #000; border-radius: 8px; overflow: hidden; }
+  .stage video, .stage canvas { display: block; width: 100%; height: auto; }
+  .stage canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+  .live { font-size: 2.8rem; font-weight: 700; letter-spacing: 0.1em; min-height: 3.2rem; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
   <h1>Digit Detection</h1>
-  <p class="sub">Upload a photo or scan of handwritten or printed digits. The service segments the digits with OpenCV and classifies them with a CNN trained on MNIST. API docs: <a href="/docs">/docs</a></p>
+  <p class="sub">Reads handwritten or printed digits from an image or a live camera. OpenCV segments the digits, a CNN trained on MNIST classifies them. API docs: <a href="/docs">/docs</a></p>
 
-  <div class="card">
-    <div class="drop" id="drop">Drop an image here or click to choose (PNG, JPEG, BMP, WEBP)</div>
-    <input type="file" id="file" accept="image/*" hidden>
-    <div class="row">
-      <label>Min. confidence <span id="confv">0.50</span> <input type="range" id="conf" min="0" max="1" step="0.05" value="0.5"></label>
-      <label><input type="checkbox" id="otsu"> thick marker (Otsu)</label>
-      <label><input type="checkbox" id="keeplines"> keep ruled lines</label>
-      <button id="go" disabled>Detect</button>
-      <span class="meta" id="fname"></span>
+  <div class="tabs">
+    <button id="tabUpload" class="active">Upload image</button>
+    <button id="tabCamera">Live camera</button>
+  </div>
+
+  <!-- ------------------------------------------------------------ upload -->
+  <section id="paneUpload">
+    <div class="card">
+      <div class="drop" id="drop">Drop an image here or click to choose (PNG, JPEG, BMP, WEBP)</div>
+      <input type="file" id="file" accept="image/*" hidden>
+      <div class="row">
+        <label>Min. confidence <span id="confv">0.50</span> <input type="range" id="conf" min="0" max="1" step="0.05" value="0.5"></label>
+        <label><input type="checkbox" id="otsu"> thick marker (Otsu)</label>
+        <label><input type="checkbox" id="keeplines"> keep ruled lines</label>
+        <button id="go" disabled>Detect</button>
+        <span class="meta" id="fname"></span>
+      </div>
     </div>
-  </div>
+    <div class="card" id="out" hidden>
+      <div class="result" id="text"></div>
+      <div class="meta" id="meta"></div>
+      <img class="out" id="img" alt="annotated result">
+      <details style="margin-top:12px"><summary class="meta">JSON response</summary><pre id="json"></pre></details>
+    </div>
+  </section>
 
-  <div class="card" id="out" hidden>
-    <div class="result" id="text"></div>
-    <div class="meta" id="meta"></div>
-    <img class="out" id="img" alt="annotated result">
-    <details style="margin-top:12px"><summary class="meta">JSON response</summary><pre id="json"></pre></details>
-  </div>
+  <!-- ------------------------------------------------------------ camera -->
+  <section id="paneCamera" hidden>
+    <div class="card">
+      <h2>Live camera</h2>
+      <div class="row">
+        <button id="camStart">Start camera</button>
+        <button id="camStop" disabled>Stop</button>
+        <button id="camFlip" disabled title="switch between front and back camera">Flip</button>
+        <label>Min. confidence <span id="cconfv">0.60</span> <input type="range" id="cconf" min="0" max="1" step="0.05" value="0.6"></label>
+        <label>Area <span id="croiv">70%</span> <input type="range" id="croi" min="30" max="100" step="5" value="70"></label>
+        <label><input type="checkbox" id="cotsu"> thick marker (Otsu)</label>
+      </div>
+      <div class="stage" id="stage" hidden>
+        <video id="video" playsinline muted autoplay></video>
+        <canvas id="overlay"></canvas>
+      </div>
+      <div class="live" id="liveText"></div>
+      <div class="meta" id="liveMeta">Hold the digits inside the green box. The reading is a majority vote over the last 8 frames; green means stable.</div>
+      <div class="meta err" id="camError" hidden></div>
+    </div>
+  </section>
 
   <div class="card">
     <div class="meta">Call it from anywhere:</div>
@@ -61,39 +100,163 @@
   </div>
 </main>
 <script>
-  const drop = document.getElementById('drop'), fileIn = document.getElementById('file'), go = document.getElementById('go');
-  const conf = document.getElementById('conf'), confv = document.getElementById('confv');
+(() => {
+  const $ = id => document.getElementById(id);
+  $('curl').textContent = $('curl').textContent.replace('ORIGIN', location.origin);
+
+  // ----------------------------------------------------------------- tabs
+  const panes = { upload: $('paneUpload'), camera: $('paneCamera') };
+  function showTab(name) {
+    $('tabUpload').classList.toggle('active', name === 'upload');
+    $('tabCamera').classList.toggle('active', name === 'camera');
+    panes.upload.hidden = name !== 'upload';
+    panes.camera.hidden = name !== 'camera';
+    if (name !== 'camera') stopCamera();
+  }
+  $('tabUpload').onclick = () => showTab('upload');
+  $('tabCamera').onclick = () => showTab('camera');
+
+  // --------------------------------------------------------------- upload
+  const drop = $('drop'), fileIn = $('file'), go = $('go'), conf = $('conf');
   let file = null;
-  document.getElementById('curl').textContent = document.getElementById('curl').textContent.replace('ORIGIN', location.origin);
-  conf.addEventListener('input', () => confv.textContent = Number(conf.value).toFixed(2));
-  drop.addEventListener('click', () => fileIn.click());
-  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
-  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]); });
-  fileIn.addEventListener('change', () => { if (fileIn.files[0]) pick(fileIn.files[0]); });
-  function pick(f) { file = f; go.disabled = false; document.getElementById('fname').textContent = f.name + ' (' + Math.round(f.size / 1024) + ' KB)'; }
-  go.addEventListener('click', async () => {
+  conf.oninput = () => $('confv').textContent = Number(conf.value).toFixed(2);
+  drop.onclick = () => fileIn.click();
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]); };
+  fileIn.onchange = () => { if (fileIn.files[0]) pick(fileIn.files[0]); };
+  function pick(f) { file = f; go.disabled = false; $('fname').textContent = f.name + ' (' + Math.round(f.size / 1024) + ' KB)'; }
+  go.onclick = async () => {
     if (!file) return;
     go.disabled = true; go.textContent = 'Detecting...';
-    const out = document.getElementById('out'), text = document.getElementById('text'), meta = document.getElementById('meta');
     const fd = new FormData(); fd.append('image', file);
-    const params = new URLSearchParams({ annotate: 'true', min_conf: conf.value, otsu: document.getElementById('otsu').checked, keep_lines: document.getElementById('keeplines').checked });
+    const params = new URLSearchParams({ annotate: 'true', min_conf: conf.value, otsu: $('otsu').checked, keep_lines: $('keeplines').checked });
     try {
       const t0 = performance.now();
-      const r = await fetch('/api/v1/detect?' + params.toString(), { method: 'POST', body: fd });
+      const r = await fetch('/api/v1/detect?' + params, { method: 'POST', body: fd });
       const ms = Math.round(performance.now() - t0);
       const j = await r.json();
-      out.hidden = false;
-      if (!r.ok) { text.innerHTML = '<span class="err">Error ' + r.status + '</span>'; meta.textContent = j.detail || ''; document.getElementById('img').removeAttribute('src'); document.getElementById('json').textContent = JSON.stringify(j, null, 2); return; }
-      text.textContent = j.digit_count ? j.text.replace(/\n/g, '  |  ') : 'no digits found';
-      meta.innerHTML = '<span class="ok">' + j.digit_count + ' digit(s), ' + j.lines.length + ' line(s)</span> - segmentation ' + j.timing_ms.segmentation + ' ms, inference ' + j.timing_ms.inference + ' ms, round trip ' + ms + ' ms, backend ' + j.model.backend;
-      if (j.annotated_png_base64) document.getElementById('img').src = 'data:image/png;base64,' + j.annotated_png_base64;
+      $('out').hidden = false;
+      if (!r.ok) { $('text').innerHTML = '<span class="err">Error ' + r.status + '</span>'; $('meta').textContent = j.detail || ''; $('img').removeAttribute('src'); $('json').textContent = JSON.stringify(j, null, 2); return; }
+      $('text').textContent = j.digit_count ? j.text.replace(/\n/g, '  |  ') : 'no digits found';
+      $('meta').innerHTML = '<span class="ok">' + j.digit_count + ' digit(s), ' + j.lines.length + ' line(s)</span> - segmentation ' + j.timing_ms.segmentation + ' ms, inference ' + j.timing_ms.inference + ' ms, round trip ' + ms + ' ms, backend ' + j.model.backend;
+      if (j.annotated_png_base64) $('img').src = 'data:image/png;base64,' + j.annotated_png_base64;
       const copy = Object.assign({}, j); delete copy.annotated_png_base64;
-      document.getElementById('json').textContent = JSON.stringify(copy, null, 2);
+      $('json').textContent = JSON.stringify(copy, null, 2);
     } catch (e) {
-      out.hidden = false; text.innerHTML = '<span class="err">Request failed</span>'; meta.textContent = String(e);
+      $('out').hidden = false; $('text').innerHTML = '<span class="err">Request failed</span>'; $('meta').textContent = String(e);
     } finally { go.disabled = false; go.textContent = 'Detect'; }
-  });
+  };
+
+  // --------------------------------------------------------------- camera
+  const video = $('video'), overlay = $('overlay'), octx = overlay.getContext('2d');
+  const work = document.createElement('canvas'), wctx = work.getContext('2d');
+  const cconf = $('cconf'), croi = $('croi');
+  cconf.oninput = () => $('cconfv').textContent = Number(cconf.value).toFixed(2);
+  croi.oninput = () => $('croiv').textContent = croi.value + '%';
+  let stream = null, running = false, inFlight = false, facing = 'environment', lastSend = 0, votes = [], fpsAvg = 0, lastFrameTs = 0;
+  const HISTORY = 8, MIN_INTERVAL_MS = 80, SEND_WIDTH = 640;
+
+  async function startCamera() {
+    $('camError').hidden = true;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return showCamError('Camera access needs a secure page (https:// or localhost) and a modern browser.');
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    } catch (e) {
+      return showCamError('Camera permission denied or no camera found: ' + e.message);
+    }
+    video.srcObject = stream;
+    await video.play();
+    $('stage').hidden = false;
+    $('camStart').disabled = true; $('camStop').disabled = false; $('camFlip').disabled = false;
+    running = true; votes = []; inFlight = false;
+    requestAnimationFrame(loop);
+  }
+  function stopCamera() {
+    running = false;
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    $('camStart').disabled = false; $('camStop').disabled = true; $('camFlip').disabled = true;
+  }
+  function showCamError(msg) { $('camError').textContent = msg; $('camError').hidden = false; }
+  $('camStart').onclick = startCamera;
+  $('camStop').onclick = stopCamera;
+  $('camFlip').onclick = () => { facing = facing === 'environment' ? 'user' : 'environment'; stopCamera(); startCamera(); };
+
+  function roiRect(w, h) {
+    const f = Number(croi.value) / 100, rw = Math.round(w * f), rh = Math.round(h * f);
+    return { x: Math.round((w - rw) / 2), y: Math.round((h - rh) / 2), w: rw, h: rh };
+  }
+
+  function loop(ts) {
+    if (!running) return;
+    if (video.videoWidth && !inFlight && ts - lastSend >= MIN_INTERVAL_MS) { lastSend = ts; sendFrame(); }
+    drawGuide();
+    requestAnimationFrame(loop);
+  }
+
+  function drawGuide() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw) return;
+    if (overlay.width !== vw || overlay.height !== vh) { overlay.width = vw; overlay.height = vh; }
+    // boxes are redrawn in drawResult; here only refresh the guide if nothing else is drawn yet
+  }
+
+  async function sendFrame() {
+    inFlight = true;
+    const vw = video.videoWidth, vh = video.videoHeight, roi = roiRect(vw, vh);
+    const scale = Math.min(1, SEND_WIDTH / roi.w);
+    work.width = Math.round(roi.w * scale); work.height = Math.round(roi.h * scale);
+    wctx.drawImage(video, roi.x, roi.y, roi.w, roi.h, 0, 0, work.width, work.height);
+    const blob = await new Promise(r => work.toBlob(r, 'image/jpeg', 0.8));
+    const fd = new FormData(); fd.append('image', blob, 'frame.jpg');
+    const params = new URLSearchParams({ min_conf: cconf.value, otsu: $('cotsu').checked, max_side: '640' });
+    const t0 = performance.now();
+    try {
+      const r = await fetch('/api/v1/detect?' + params, { method: 'POST', body: fd });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      const rt = performance.now() - t0;
+      const now = performance.now();
+      if (lastFrameTs) { const inst = 1000 / (now - lastFrameTs); fpsAvg = fpsAvg ? 0.8 * fpsAvg + 0.2 * inst : inst; }
+      lastFrameTs = now;
+      const text = j.lines.map(l => l.text).join(' | ');
+      votes.push(text); if (votes.length > HISTORY) votes.shift();
+      const counts = {}; votes.forEach(v => counts[v] = (counts[v] || 0) + 1);
+      const best = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+      const agree = counts[best] / votes.length;
+      drawResult(j, roi, scale);
+      $('liveText').textContent = best || '-';
+      $('liveText').className = 'live ' + (agree >= 0.6 && best ? 'ok' : 'warn');
+      $('liveMeta').textContent = `${j.digit_count} digit(s) now | agreement ${Math.round(agree * 100)}% | ${fpsAvg.toFixed(1)} fps | server ${j.timing_ms.segmentation + j.timing_ms.inference} ms, round trip ${Math.round(rt)} ms | ${j.model.backend}`;
+    } catch (e) {
+      $('liveMeta').textContent = 'request failed: ' + e.message;
+    } finally { inFlight = false; }
+  }
+
+  function drawResult(j, roi, scale) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (overlay.width !== vw || overlay.height !== vh) { overlay.width = vw; overlay.height = vh; }
+    octx.clearRect(0, 0, vw, vh);
+    octx.lineWidth = 2; octx.strokeStyle = 'rgba(0,200,0,0.7)';
+    octx.strokeRect(roi.x, roi.y, roi.w, roi.h);
+    octx.font = `${Math.max(16, Math.round(vh / 28))}px system-ui, sans-serif`;
+    octx.textBaseline = 'bottom';
+    j.lines.forEach(l => l.digits.forEach(d => {
+      const x = roi.x + d.x / scale, y = roi.y + d.y / scale, w = d.w / scale, h = d.h / scale;
+      octx.strokeStyle = d.accepted ? '#22c55e' : '#f59e0b';
+      octx.lineWidth = 3;
+      octx.strokeRect(x, y, w, h);
+      const label = (d.accepted ? d.label : '?') + ' ' + d.confidence.toFixed(2);
+      octx.fillStyle = 'rgba(0,0,0,0.6)';
+      const tw = octx.measureText(label).width;
+      octx.fillRect(x, Math.max(0, y - 26), tw + 8, 24);
+      octx.fillStyle = d.accepted ? '#22c55e' : '#f59e0b';
+      octx.fillText(label, x + 4, Math.max(22, y - 3));
+    }));
+  }
+})();
 </script>
 </body>
 </html>
